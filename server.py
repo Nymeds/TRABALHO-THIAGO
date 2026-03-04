@@ -23,10 +23,12 @@ class ClientSession:
 
 clients: Dict[socket.socket, ClientSession] = {}
 rooms: Dict[str, Set[socket.socket]] = {}
+known_rooms: Set[str] = set()
 state_lock = threading.Lock()
 history_lock = threading.Lock()
 
 HISTORY_DIR = Path("storage") / "history"
+ROOMS_FILE = Path("storage") / "rooms.json"
 MAX_ROOM_HISTORY = 120
 
 
@@ -42,8 +44,66 @@ def sanitize_room(raw_room: object) -> str:
     return room[:32]
 
 
-def ensure_history_dir() -> None:
+def ensure_storage_dirs() -> None:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    ROOMS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_persisted_rooms() -> Set[str]:
+    if not ROOMS_FILE.exists():
+        return set()
+
+    try:
+        raw_data = json.loads(ROOMS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    loaded_rooms: Set[str] = set()
+    if isinstance(raw_data, list):
+        for item in raw_data:
+            room_name = sanitize_room(item)
+            if room_name:
+                loaded_rooms.add(room_name)
+
+    return loaded_rooms
+
+
+def save_persisted_rooms(room_names: List[str]) -> None:
+    ensure_storage_dirs()
+    serialized = json.dumps(room_names, ensure_ascii=False, indent=2)
+    ROOMS_FILE.write_text(serialized, encoding="utf-8")
+
+
+def register_room(room_name: str) -> None:
+    room_name = sanitize_room(room_name)
+    if not room_name:
+        return
+
+    with state_lock:
+        if room_name in known_rooms:
+            rooms.setdefault(room_name, set())
+            return
+
+        known_rooms.add(room_name)
+        rooms.setdefault(room_name, set())
+        snapshot = sorted(known_rooms, key=str.casefold)
+        save_persisted_rooms(snapshot)
+
+
+def initialize_room_state() -> None:
+    ensure_storage_dirs()
+    loaded_rooms = load_persisted_rooms()
+
+    with state_lock:
+        known_rooms.clear()
+        known_rooms.update(loaded_rooms)
+        rooms.clear()
+        for room_name in loaded_rooms:
+            rooms[room_name] = set()
+        snapshot = sorted(known_rooms, key=str.casefold)
+
+    # Normaliza o arquivo (cria caso nao exista e remove entradas invalidas).
+    save_persisted_rooms(snapshot)
 
 
 def history_file_for_room(room_name: str) -> Path:
@@ -65,7 +125,8 @@ def persist_room_message(room_name: str, sender: str, payload: dict) -> None:
     if not is_valid_encrypted_payload(payload):
         return
 
-    ensure_history_dir()
+    register_room(room_name)
+    ensure_storage_dirs()
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "sender": sender,
@@ -153,9 +214,8 @@ def get_session(conn: socket.socket) -> Optional[ClientSession]:
 def get_room_snapshot() -> List[dict]:
     with state_lock:
         snapshot = [
-            {"name": room_name, "users": len(members)}
-            for room_name, members in sorted(rooms.items())
-            if members
+            {"name": room_name, "users": len(rooms.get(room_name, set()))}
+            for room_name in sorted(known_rooms, key=str.casefold)
         ]
     return snapshot
 
@@ -230,8 +290,6 @@ def move_client_to_room(conn: socket.socket, new_room: str) -> Tuple[Optional[st
             old_members = rooms.get(old_room)
             if old_members is not None:
                 old_members.discard(conn)
-                if not old_members:
-                    rooms.pop(old_room, None)
 
         rooms[new_room].add(conn)
         session.room = new_room
@@ -248,8 +306,6 @@ def leave_current_room(conn: socket.socket) -> Tuple[Optional[str], Optional[str
         members = rooms.get(room_name)
         if members is not None:
             members.discard(conn)
-            if not members:
-                rooms.pop(room_name, None)
 
         session.room = None
         return session.name, room_name
@@ -266,8 +322,6 @@ def handle_disconnect(conn: socket.socket) -> Tuple[Optional[str], Optional[str]
             members = rooms.get(room_name)
             if members is not None:
                 members.discard(conn)
-                if not members:
-                    rooms.pop(room_name, None)
 
     try:
         conn.close()
@@ -316,6 +370,7 @@ def process_create_room(conn: socket.socket, packet: dict, shared_secret: str) -
         safe_send(conn, {"type": "error", "text": "Nome da sala invalido."})
         return
 
+    register_room(room_name)
     session_name, old_room, new_room = move_client_to_room(conn, room_name)
     if session_name is None or new_room is None:
         return
@@ -336,7 +391,7 @@ def process_join_room(conn: socket.socket, packet: dict, shared_secret: str) -> 
         return
 
     with state_lock:
-        exists = room_name in rooms and bool(rooms[room_name])
+        exists = room_name in known_rooms
 
     if not exists:
         safe_send(conn, {"type": "error", "text": "Sala nao encontrada."})
@@ -411,14 +466,18 @@ def handle_client(conn: socket.socket, address: Tuple[str, int], shared_secret: 
 
 
 def run_server(host: str, port: int, shared_secret: str) -> None:
-    ensure_history_dir()
+    initialize_room_state()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((host, port))
         server_sock.listen()
 
         print(f"Servidor ouvindo em {host}:{port}")
+        print(f"Salas persistidas: {ROOMS_FILE.resolve()}")
         print(f"Historico criptografado: {HISTORY_DIR.resolve()}")
+        with state_lock:
+            persisted_count = len(known_rooms)
+        print(f"Total de salas persistidas carregadas: {persisted_count}")
         if host == "0.0.0.0":
             ips = get_local_ipv4_addresses()
             if ips:

@@ -15,3 +15,4 @@ ENV/
 Thumbs.db
 storage/history/*.jsonl
 !storage/history/.gitkeep
+storage/rooms.json

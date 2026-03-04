@@ -22,11 +22,16 @@ Projeto da atividade avaliativa de redes com arquitetura cliente-servidor, socke
 - Criptografia didatica obrigatoria nas mensagens do chat.
 - Persistencia de historico criptografado por sala em pasta local do projeto.
 
-## Persistencia de historico
+## Persistencia de salas e historico
 
-As mensagens do chat ficam persistidas no servidor, separadas por sala, em:
+As salas e mensagens ficam persistidas no servidor em:
 
-- `storage/history/`
+- `storage/rooms.json` (cadastro de salas)
+- `storage/history/` (historico criptografado por sala)
+
+Com isso, ao reiniciar o servidor:
+- as salas continuam aparecendo no lobby (mesmo com `0` usuarios online);
+- qualquer cliente pode entrar nessas salas e receber o historico.
 
 Cada arquivo contem registros JSONL com:
 - timestamp (`ts`)
