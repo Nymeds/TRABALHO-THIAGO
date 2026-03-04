@@ -8,6 +8,9 @@ Este projeto foi implementado para a atividade avaliativa de Redes de Computador
 ![alt text]({1B7FABAF-FE46-419A-A139-8BCCDE670BB5}.png)
 
 
+GRUPO : Rafael , Isabella , Lucas Bueno e Muryllo 
+
+
 ## Visao geral
 
 O sistema possui:
