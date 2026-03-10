@@ -12,6 +12,7 @@ from protocol import recv_packet, send_packet
 
 
 class ChatGUI(tk.Tk):
+   
     def __init__(self, host: str, port: int, shared_secret: str) -> None:
         super().__init__()
         self.title("Chat Seguro - Cliente")
@@ -45,6 +46,7 @@ class ChatGUI(tk.Tk):
         self.after(120, self._poll_network_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    
     def _configure_styles(self) -> None:
         self.configure(bg="#eef3fb")
 
@@ -90,6 +92,7 @@ class ChatGUI(tk.Tk):
         self.status_label = ttk.Label(root, text="Desconectado", style="Status.TLabel")
         self.status_label.pack(fill=tk.X, pady=(10, 0))
 
+    # O Enter no campo de nome dispara `_connect`.
     def _build_login(self, frame: ttk.Frame) -> None:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
@@ -123,6 +126,7 @@ class ChatGUI(tk.Tk):
         self.connect_button.grid(row=5, column=1, sticky="ew")
 
         ttk.Label(frame, text="Exemplo: 192.168.0.15:5000", style="Hint.TLabel").grid(row=2, column=0, pady=(8, 0))
+
 
     def _build_lobby(self, frame: ttk.Frame) -> None:
         frame.columnconfigure(0, weight=1)
@@ -231,6 +235,7 @@ class ChatGUI(tk.Tk):
 
         self._render_lobby_state()
 
+  
     def _build_chat(self, frame: ttk.Frame) -> None:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
@@ -294,6 +299,7 @@ class ChatGUI(tk.Tk):
             child.pack_forget()
         frame.pack(fill=tk.BOTH, expand=True)
 
+
     def _render_lobby_state(self) -> None:
         has_rooms = bool(self.room_items)
 
@@ -306,6 +312,7 @@ class ChatGUI(tk.Tk):
             self.rooms_table_frame.grid_remove()
             self.lobby_actions.grid_remove()
             self.empty_state_frame.grid(row=2, column=0, pady=(24, 30), sticky="ew")
+
 
     def _connect(self) -> None:
         name = self.login_name_entry.get().strip()
@@ -323,11 +330,15 @@ class ChatGUI(tk.Tk):
         self.connect_button.configure(state=tk.DISABLED)
         sock: Optional[socket.socket] = None
         try:
+ 
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(6)
             sock.connect((host, port))
+ 
             send_packet(sock, {"type": "hello", "name": name})
 
+          
+            #  Cliente so segue se receber hello_ack.
             response = recv_packet(sock)
             if response is None:
                 raise ConnectionError("Servidor encerrou durante o handshake.")
@@ -363,6 +374,7 @@ class ChatGUI(tk.Tk):
         finally:
             self.connect_button.configure(state=tk.NORMAL)
 
+  
     def _parse_server_identifier(self, value: str) -> tuple[str, int]:
         text = value.strip()
         if not text:
@@ -385,12 +397,14 @@ class ChatGUI(tk.Tk):
 
         return host, port
 
+
     def _listen_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
                 sock = self.sock
                 if sock is None:
                     break
+        
                 packet = recv_packet(sock)
             except (ConnectionError, OSError, ValueError) as exc:
                 if not self.stop_event.is_set():
@@ -416,6 +430,7 @@ class ChatGUI(tk.Tk):
 
         self.after(120, self._poll_network_events)
 
+
     def _handle_packet(self, packet: dict) -> None:
         packet_type = packet.get("type")
 
@@ -439,6 +454,7 @@ class ChatGUI(tk.Tk):
             room = str(packet.get("room", "")).strip()
             messages = packet.get("messages", [])
             if room and self.current_room == room:
+    
                 self._render_room_history(messages)
             return
 
@@ -457,6 +473,7 @@ class ChatGUI(tk.Tk):
                 return
 
             try:
+  
                 text = decrypt_text(payload, self.shared_secret)
             except ValueError:
                 self._append_chat_line("[ERRO] Mensagem com autenticacao invalida.")
@@ -483,6 +500,7 @@ class ChatGUI(tk.Tk):
                 messagebox.showwarning("Desconectado", message)
             return
 
+
     def _render_room_history(self, messages: object) -> None:
         if not isinstance(messages, list):
             self._append_chat_line("[Historico] Nao foi possivel carregar mensagens anteriores.")
@@ -502,6 +520,7 @@ class ChatGUI(tk.Tk):
                 continue
 
             try:
+
                 text = decrypt_text(payload, self.shared_secret)
             except ValueError:
                 self._append_chat_line(f"[{sender}] [mensagem invalida no historico]")
@@ -509,6 +528,7 @@ class ChatGUI(tk.Tk):
 
             self._append_chat_line(f"[{sender}] {text}")
 
+  
     def _update_room_list(self, rooms: object) -> None:
         for item in self.rooms_tree.get_children():
             self.rooms_tree.delete(item)
@@ -599,6 +619,7 @@ class ChatGUI(tk.Tk):
         y = self.winfo_rooty() + (self.winfo_height() // 2) - (h // 2)
         dialog.geometry(f"{w}x{h}+{x}+{y}")
 
+   
     def _join_selected_room(self) -> None:
         if not self.room_items:
             messagebox.showinfo("Sem salas", "Nenhuma sala aberta para entrar.")
@@ -617,14 +638,18 @@ class ChatGUI(tk.Tk):
         if room_name:
             self._send({"type": "join_room", "room": room_name})
 
+  
     def _leave_room(self) -> None:
         self._send({"type": "leave_room"})
+
 
     def _send_chat_message(self) -> None:
         text = self.chat_input.get().strip()
         if not text:
             return
 
+        #  CRIPTOGRAFIA IMPORTANTE 
+        #  Antes de sair do cliente, texto e cifrado em nonce/ciphertext/tag.
         packet = {
             "type": "message",
             "payload": encrypt_text(text, self.shared_secret),
@@ -638,11 +663,13 @@ class ChatGUI(tk.Tk):
         self.chat_log.see(tk.END)
         self.chat_log.configure(state=tk.DISABLED)
 
+
     def _clear_chat_log(self) -> None:
         self.chat_log.configure(state=tk.NORMAL)
         self.chat_log.delete("1.0", tk.END)
         self.chat_log.configure(state=tk.DISABLED)
 
+ 
     def _send(self, packet: dict, silent: bool = False) -> bool:
         if self.sock is None:
             if not silent:
@@ -653,6 +680,8 @@ class ChatGUI(tk.Tk):
             with self.send_lock:
                 if self.sock is None:
                     return False
+          
+                # Todo comando (list_rooms, create_room, join_room, message...) sai por aqui.
                 send_packet(self.sock, packet)
             return True
         except OSError:
@@ -660,12 +689,14 @@ class ChatGUI(tk.Tk):
                 self.event_queue.put({"type": "disconnected", "text": "Falha ao enviar pacote."})
             return False
 
+
     def _disconnect_to_login(self) -> None:
         self.user_initiated_disconnect = True
         self._hard_disconnect()
         self._show_screen(self.login_frame)
         self._set_status("Desconectado")
 
+  
     def _hard_disconnect(self) -> None:
         self.stop_event.set()
 
@@ -687,6 +718,7 @@ class ChatGUI(tk.Tk):
         self._clear_chat_log()
         self._update_room_list([])
 
+
     def _clear_event_queue(self) -> None:
         while True:
             try:
@@ -699,8 +731,10 @@ class ChatGUI(tk.Tk):
         self._hard_disconnect()
         self.destroy()
 
+    
     def _set_status(self, text: str) -> None:
         self.status_label.configure(text=text)
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -713,6 +747,7 @@ def parse_args() -> argparse.Namespace:
         help="Chave compartilhada para criptografia",
     )
     return parser.parse_args()
+
 
 
 def main() -> None:

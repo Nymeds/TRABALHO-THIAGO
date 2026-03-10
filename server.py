@@ -14,6 +14,9 @@ from crypto_utils import decrypt_text, encrypt_text
 from protocol import recv_packet, send_packet
 
 
+# Server: 1 - Estrutura base de sessao de cada cliente conectado.
+# Aqui guardamos nome, endereco e sala atual para conseguir rotear mensagens
+# e atualizar o estado do lobby quando um usuario muda de sala ou desconecta.
 @dataclass
 class ClientSession:
     name: str
@@ -21,6 +24,10 @@ class ClientSession:
     room: Optional[str] = None
 
 
+# Server: 2 - Estado global compartilhado entre threads do servidor.
+# `clients` mapeia socket -> sessao; `rooms` guarda membros por sala;
+# `known_rooms` inclui salas persistidas mesmo sem usuarios online.
+# `state_lock` protege estado de conexoes/salas e `history_lock` protege I/O de historico.
 clients: Dict[socket.socket, ClientSession] = {}
 rooms: Dict[str, Set[socket.socket]] = {}
 known_rooms: Set[str] = set()
@@ -37,6 +44,7 @@ def sanitize_name(raw_name: object) -> str:
     if not name:
         return "Anonimo"
     return name[:24]
+
 
 
 def sanitize_room(raw_room: object) -> str:
@@ -66,6 +74,7 @@ def load_persisted_rooms() -> Set[str]:
                 loaded_rooms.add(room_name)
 
     return loaded_rooms
+
 
 
 def save_persisted_rooms(room_names: List[str]) -> None:
@@ -106,6 +115,7 @@ def initialize_room_state() -> None:
     save_persisted_rooms(snapshot)
 
 
+
 def history_file_for_room(room_name: str) -> Path:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", room_name.strip()).strip("-").lower()
     if not slug:
@@ -127,6 +137,7 @@ def persist_room_message(room_name: str, sender: str, payload: dict) -> None:
 
     register_room(room_name)
     ensure_storage_dirs()
+
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "sender": sender,
@@ -172,7 +183,6 @@ def load_room_history(room_name: str, limit: int = MAX_ROOM_HISTORY) -> List[dic
         return []
     return entries[-limit:]
 
-
 def get_local_ipv4_addresses() -> List[str]:
     addresses: Set[str] = set()
 
@@ -205,7 +215,6 @@ def safe_send(conn: socket.socket, packet: dict) -> bool:
     except OSError:
         return False
 
-
 def get_session(conn: socket.socket) -> Optional[ClientSession]:
     with state_lock:
         return clients.get(conn)
@@ -232,7 +241,6 @@ def broadcast_room_list() -> None:
 
     for conn in disconnected:
         handle_disconnect(conn)
-
 
 def get_room_members(room_name: str) -> List[socket.socket]:
     with state_lock:
@@ -309,8 +317,6 @@ def leave_current_room(conn: socket.socket) -> Tuple[Optional[str], Optional[str
 
         session.room = None
         return session.name, room_name
-
-
 def handle_disconnect(conn: socket.socket) -> Tuple[Optional[str], Optional[str]]:
     with state_lock:
         session = clients.pop(conn, None)
@@ -352,12 +358,13 @@ def process_message_packet(conn: socket.socket, packet: dict, shared_secret: str
         return
 
     try:
-        # Valida autenticidade/integridade sem exibir o texto em claro no servidor.
+        # CRIPTOGRAFIA 
         decrypt_text(payload, shared_secret)
     except ValueError:
         print(f"[!] Mensagem invalida de {session.name}: falha de autenticacao.")
         safe_send(conn, {"type": "error", "text": "Falha de autenticacao da mensagem."})
         return
+
 
     print(f"[{session.room}] [{session.name}] payload_criptografado={payload}")
     persist_room_message(session.room, session.name, payload)
@@ -376,13 +383,13 @@ def process_create_room(conn: socket.socket, packet: dict, shared_secret: str) -
         return
 
     safe_send(conn, {"type": "joined_room", "room": new_room})
+
     safe_send(conn, {"type": "room_history", "room": new_room, "messages": load_room_history(new_room)})
     broadcast_room_list()
 
     if old_room and old_room != new_room:
         broadcast_encrypted(old_room, "Servidor", f"{session_name} saiu da sala.", shared_secret)
     broadcast_encrypted(new_room, "Servidor", f"{session_name} entrou na sala.", shared_secret)
-
 
 def process_join_room(conn: socket.socket, packet: dict, shared_secret: str) -> None:
     room_name = sanitize_room(packet.get("room"))
@@ -402,6 +409,7 @@ def process_join_room(conn: socket.socket, packet: dict, shared_secret: str) -> 
         return
 
     safe_send(conn, {"type": "joined_room", "room": new_room})
+
     safe_send(conn, {"type": "room_history", "room": new_room, "messages": load_room_history(new_room)})
     broadcast_room_list()
 
@@ -421,10 +429,12 @@ def process_leave_room(conn: socket.socket, shared_secret: str) -> None:
         broadcast_encrypted(old_room, "Servidor", f"{session_name} saiu da sala.", shared_secret)
 
 
+
 def handle_client(conn: socket.socket, address: Tuple[str, int], shared_secret: str) -> None:
     client_name: Optional[str] = None
 
     try:
+ 
         hello_packet = recv_packet(conn)
         if hello_packet is None or hello_packet.get("type") != "hello":
             safe_send(conn, {"type": "error", "text": "Handshake invalido."})
@@ -432,6 +442,7 @@ def handle_client(conn: socket.socket, address: Tuple[str, int], shared_secret: 
 
         client_name = sanitize_name(hello_packet.get("name"))
         with state_lock:
+
             clients[conn] = ClientSession(name=client_name, address=address)
 
         print(f"[+] {client_name} conectado de {address[0]}:{address[1]}")
@@ -439,6 +450,7 @@ def handle_client(conn: socket.socket, address: Tuple[str, int], shared_secret: 
         broadcast_room_list()
 
         while True:
+            #  SOCKET LOOP PRINCIPAL:
             packet = recv_packet(conn)
             if packet is None:
                 break
@@ -465,8 +477,10 @@ def handle_client(conn: socket.socket, address: Tuple[str, int], shared_secret: 
             broadcast_encrypted(room_name, "Servidor", f"{name} saiu da sala.", shared_secret)
 
 
+
 def run_server(host: str, port: int, shared_secret: str) -> None:
     initialize_room_state()
+    #  Aqui nasce o servidor TCP: cria socket, bind no host/porta e listen().
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((host, port))
@@ -492,9 +506,12 @@ def run_server(host: str, port: int, shared_secret: str) -> None:
             print("[!] Aviso: voce esta usando a chave padrao. Troque com --key ou CHAT_SHARED_KEY.")
 
         while True:
+       
+            #  Cada conexao aceita vira uma thread dedicada em `handle_client`.
             conn, addr = server_sock.accept()
             thread = threading.Thread(target=handle_client, args=(conn, addr, shared_secret), daemon=True)
             thread.start()
+
 
 
 def parse_args() -> argparse.Namespace:

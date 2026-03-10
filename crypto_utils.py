@@ -29,6 +29,9 @@ def _b64decode(text: str) -> bytes:
     return base64.b64decode(text.encode("ascii"))
 
 
+
+#  Cliente cifra mensagem ANTES de enviar para o servidor.
+#  Saida: nonce + ciphertext + tag(HMAC). O texto puro nao vai para a rede.
 def encrypt_text(plaintext: str, shared_secret: str) -> Dict[str, str]:
     key = _derive_key(shared_secret)
     nonce = secrets.token_bytes(16)
@@ -43,6 +46,9 @@ def encrypt_text(plaintext: str, shared_secret: str) -> Dict[str, str]:
     }
 
 
+# 
+# Primeiro valida autenticidade/integridade via HMAC.
+#  So depois descriptografa. Se a tag falhar, mensagem e rejeitada.
 def decrypt_text(payload: Dict[str, str], shared_secret: str) -> str:
     key = _derive_key(shared_secret)
     try:
